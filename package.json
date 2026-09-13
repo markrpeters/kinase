@@ -1,7 +1,8 @@
 {
-  "name": "pi-fanout",
+  "name": "@pricklypete/kinase",
   "version": "0.1.0",
-  "description": "scout / runner / fanout: delegate bounded tool calls to cheap local-model subagents from a pi session, concurrently, with code-owned dispatch and an append-only collection store",
+  "description": "A harness that activates agents: scouts, fanout, and a runner over pi.",
+  "author": "Mark Peters",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -16,7 +17,11 @@
     "verify": "npm run setup && npm run typecheck && npm test && npm run scan"
   },
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "agents",
+    "fanout",
+    "harness",
+    "ollama"
   ],
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.2"

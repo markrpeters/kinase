@@ -11,9 +11,9 @@
  *
  * Node model (localhost by default):
  *   - One node named "local" always exists. Its model ref is SCOUT_MODEL (a full
- *     "provider/id", e.g. "ollama/qwen2.5-coder:7b") or DEFAULT_MODEL_REF when unset.
+ *     "provider/id", e.g. "ollama/qwen2.5:7b") or DEFAULT_MODEL_REF when unset.
  *   - Any environment variable SCOUT_MODEL_<NAME>="provider/id" defines a further node
- *     called <name> (lowercased) — e.g. SCOUT_MODEL_GPU2="gpu2/qwen2.5-coder:7b" where
+ *     called <name> (lowercased) — e.g. SCOUT_MODEL_GPU2="gpu2/qwen2.5:7b" where
  *     "gpu2" is a provider you declared in ~/.pi/agent/models.json pointing at another
  *     machine. SCOUT_MODEL_LOCAL overrides the local node the same way.
  *   - SCOUT_DEFAULT_NODE picks which node a call without `node` goes to (default "local").
@@ -122,9 +122,11 @@ export function coerceScoutArgs(args: unknown): ScoutArgs {
 export const DEFAULT_NODE = "local";
 
 /** Placeholder model for the local node when SCOUT_MODEL is unset. Any small model that
- * supports tool calling and that your Ollama has pulled will do; the provider half must
- * match a provider declared in ~/.pi/agent/models.json (see config/models.json). */
-export const DEFAULT_MODEL_REF = "ollama/qwen2.5-coder:7b";
+ * ACTUALLY emits tool calls through your server will do; the provider half must match a
+ * provider declared in ~/.pi/agent/models.json (see config/models.json). Verified live
+ * (Ollama 0.32): qwen2.5:7b, llama3.1:8b, granite4.1:3b, gemma4:e4b call the tool;
+ * qwen2.5-coder:7b echoes the call as text and fabricates output (status "no_call"). */
+export const DEFAULT_MODEL_REF = "ollama/qwen2.5:7b";
 
 const NODE_ENV_PREFIX = "SCOUT_MODEL_";
 

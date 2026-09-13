@@ -186,6 +186,17 @@ check("parse: verbatim toolResult lifted from tool_execution_end", (() => {
   return p.toolResult === "a|1\nb|2" && p.text.startsWith("the rows") && p.status === "done";
 })());
 check("parse: toolResult empty when the stream carried none", parseRunnerStream(DONE).toolResult === "");
+// A DONE with NO tool_execution_start is a fabricated report (seen live: the model echoes
+// the call as JSON text, invents output, types DONE). Never "done".
+check("parse: DONE with zero tool calls -> no_call", (() => {
+  const p = parseRunnerStream([td('{"name":"grep","arguments":{"pattern":"x"}}\nsrc/index.ts:5: x\nDONE\n'), endOk].join("\n") + "\n");
+  return p.status === "no_call" && p.toolCalls === 0 && p.toolResult === "";
+})());
+check("parse: no sentinel and zero tool calls -> no_call (not unknown)", parseRunnerStream([td("I would run it like this"), endOk].join("\n") + "\n").status === "no_call");
+check("parse: ABORT with zero tool calls stays abort", parseRunnerStream([td("ABORT path missing\n"), endOk].join("\n") + "\n").status === "abort");
+check("parse: DONE with one tool call stays done", parseRunnerStream(DONE).status === "done");
+check("parse: trailing DONE on the result line -> done", parseRunnerStream([toolStart, td("0.84.2 DONE"), endOk].join("\n") + "\n").status === "done");
+check("parse: DONE mid-prose is not a sentinel", parseRunnerStream([toolStart, td("the DONE flag was set, then more"), endOk].join("\n") + "\n").status === "unknown");
 check("lastToolResult: last successful wins, errored skipped", (() => {
   const s = [toolEndData("first"), toolEndData("second"), JSON.stringify({ type: "tool_execution_end", isError: true, result: { content: [{ type: "text", text: "bad" }] } })].join("\n");
   return lastToolResult(s) === "second";
@@ -359,7 +370,7 @@ check("empty tool -> Error:", (await execErr({ args: {} }))?.message.includes("r
 {
   // truncation to RUNNER_MAX_CHARS
   const long = td("z".repeat(200) + "\nDONE\n");
-  const { tool } = await boot(ok(long + "\n" + endOk + "\n"), { env: { RUNNER_MAX_CHARS: "40" } });
+  const { tool } = await boot(ok(toolStart + "\n" + long + "\n" + endOk + "\n"), { env: { RUNNER_MAX_CHARS: "40" } });
   const res = await tool.execute("tc", { tool: "run_query", args: {} }, undefined);
   check("budget: truncated to max", res.content[0].text.length === 40 && res.details.truncated === true);
 }
@@ -546,9 +557,10 @@ check("collect readme names the schema", (() => { const t = collectReadme(); ret
   const stream = [toolStart, toolEndData("a|1\nb|2"), td("two rows, a and b\nDONE\n"), endOk].join("\n") + "\n";
   const fs = mockFs();
   const { tool } = await boot(ok(stream), { fs, env: { RUNNER_COLLECT_DIR: dir } });
-  await tool.execute("tc", { tool: "run_query", args: {} }, undefined);
+  const res = await tool.execute("tc", { tool: "run_query", args: {} }, undefined);
   const rec = JSON.parse((fs.files.get(join(dir, "index.jsonl")) ?? "").trim());
   check("collect data: result = verbatim tool output, scout_note = narration", rec.result === "a|1\nb|2" && rec.scout_note === "two rows, a and b\nDONE");
+  check("caller return: verbatim tool output, not the narration", res.content[0].text === "a|1\nb|2" && res.details.tool_calls === 1);
 }
 
 // wiring: sidecar split when a single result exceeds RUNNER_COLLECT_MAX_INLINE

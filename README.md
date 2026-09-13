@@ -1,212 +1,150 @@
-# pi-fanout
+# Kinase
 
-Delegate bounded tool calls from a [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-coding-agent session to cheap **local-model subagents**, run K of them **concurrently**, and
-file every return into an **append-only collection store** a later reasoning pass can load.
+A harness that activates agents: **scouts**, **fanout**, and a **runner** over
+[pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent).
 
-Status: **v0, extracted.** The mock suites, typecheck and identifier scan pass offline. The
-live path (a real pi subprocess talking to a real model server) is the same code that ran
-daily in the private repo it came from, but it has **not** been re-driven from this export
-yet. Treat it as a candidate until you have run it against your own model server.
+Kinase is a domain-neutral agent harness. A *profile* wires it to a situation: which tools
+the agents may call, which model sits on which machine, what gets collected. The first
+profile was digital forensics and incident response; the harness underneath never cared.
+This repository is the harness, extracted from a larger private one and re-verified on
+its own.
 
-## The problem
+**Why Kinase?** A kinase is the enzyme that switches on a signaling cascade: one
+phosphorylation, and a whole pathway lights up downstream. It was named by a biochemistry
+graduate who wanted the orchestrator to do exactly that, one call that activates many
+bounded workers.
+
+## The idea
 
 Small local models (2–9B) fail at open-ended delegation: hand one a whole investigation and
-it loops, hallucinates tool arguments, or loses the thread. Hand the same model one
-*prescribed* call — "run this tool with exactly these arguments and report the result" —
-and it succeeds almost every time. So the split is:
+it loops or invents tool arguments. Hand it one *prescribed* call, "run this tool with
+exactly these arguments and report the result", and it succeeds almost every time. So
+**code owns** dispatch, concurrency, result extraction and status; **the small model owns**
+one slot: make the call, report it, say `DONE` or `ABORT`. The orchestrator makes one call,
+gets per-job results back, and never has to take a small model's word for anything: status
+is read from the subprocess event stream, and a `DONE` with zero tool calls is `no_call`.
 
-- **CODE owns** dispatch, routing, parallelism, result extraction, status classification and
-  filing.
-- **The small model owns** one narrow slot: make the call, report verbatim, say `DONE` or
-  `ABORT`.
-
-The orchestrating model (which can itself be a small local model) makes **one** tool call
-and gets structured per-job results back. It never has to emit K well-formed parallel calls.
-
-## What you get
-
-Four pi tools, registered by two extension files:
-
-| tool | file | what it does |
-|---|---|---|
-| `scout` | `src/scout-tool.ts` | Delegate a single-fact **repository lookup** ("what port does X listen on?"). The subagent runs bare with only `read,grep,find,ls`, answers in one sentence with a `file:line` citation. |
-| `runner` | `src/runner-tool.ts` | Delegate **one prescribed call** of any tool active in the parent session (built-in or extension) to a subagent on a node. Returns the result plus a deterministic `done / abort / tool_error / unknown` status. |
-| `fanout` | `src/runner-tool.ts` | Delegate **K prescribed calls concurrently** (one subprocess each, `Promise.all`). Per-job results; one job's failure never sinks the batch. |
-| `recall` | `src/runner-tool.ts` | Load what `runner`/`fanout` **collected**, filtered by tool/node/status/phase/since, under a character budget with sidecar hydration. |
+## Architecture
 
 ```mermaid
 flowchart LR
-  A[orchestrator session] -- "fanout {jobs:[…]}" --> B[runner-tool.ts]
-  B -- "spawn pi -p --mode json --no-extensions -e tool.ts --tools name" --> C1[subagent · node local]
-  B --> C2[subagent · node gpu2]
-  B --> C3[subagent · node local]
-  C1 & C2 & C3 -- NDJSON stream --> B
-  B -- "per-job {status,node,tool,result|error,wall_ms}" --> A
-  B -- append --> S[(collected/index.jsonl + sidecars)]
-  A -- recall --> S
+  O[orchestrator session] -->|one call| S[scout]
+  O -->|one call| R[runner]
+  O -->|one call| F[fanout]
+  S -->|"pi -p --tools read,grep,find,ls"| S1[bare subagent]
+  R -->|"pi -p --no-extensions -e tool.ts --tools name"| R1[bare subagent]
+  F -->|K concurrent spawns| F1[subagent · node local]
+  F --> F2[subagent · node gpu2]
+  S1 & R1 & F1 & F2 -->|NDJSON stream| C{classify: done · abort · tool_error · no_call}
+  C -->|append| K[(collect: index.jsonl + sidecars)]
+  K -->|recall, budgeted| O
 ```
 
-### Tool inheritance
+| tool | what it does |
+|---|---|
+| `scout` | One single-fact repository lookup by a read-only subagent, answered in one sentence with a `file:line` citation. |
+| `runner` | One prescribed call of any tool active in the parent session, run by a subagent on a named node (a machine with a model server). Returns the verbatim tool output plus a status. |
+| `fanout` | K prescribed calls at once, one subprocess each. One job's failure never sinks the batch. |
+| `recall` | Load what earlier jobs collected, filtered by tool, node, status or time, under a character budget. |
 
-The runner is tool-agnostic. It reads the parent session's live toolset through
-`pi.getActiveTools()` / `pi.getAllTools()`, resolves the requested tool to the extension file
-that registered it (`sourceInfo.path`), and launches the subagent with
-`--no-extensions -e <that file> --tools <that name>`. The subagent therefore has **exactly one
-tool** and none of the parent's hooks, packages or skills.
+Each subagent is a headless `pi -p` process that emits one JSON event per line; the harness
+reads that stream, lifts the verbatim tool output, classifies the status, and appends a
+record (node, model, tool, args, status, tool-call count, wall time) to a collection store.
+A store write that fails is logged and never fails the job.
 
-### Deterministic status
+## What a reviewer needs to run it
 
-The small model's `DONE`/`ABORT` text is never trusted alone. `parseRunnerStream` classifies
-from the NDJSON event stream: an `ABORT` sentinel wins, then a `tool_execution_end` with
-`isError`, then `DONE`, else `unknown`. The verbatim tool result is lifted from the stream
-separately from the model's narration, and the store files the **data**, not the narration.
-
-### Collection store
-
-With `RUNNER_COLLECT_DIR` set, every delegated return (success *and* failure) is appended as
-one JSON line to `index.jsonl`; results over the inline cap go to a `<id>.txt` sidecar. Writes
-are best-effort: a filing fault is logged as a forensic `collect_seam` entry and never fails
-the dispatch. `recall` decides inclusion newest-first by recorded size, hydrates only what
-fits the budget, and stubs the rest with `over_budget: true` and a real `result_ref`.
-
-### Error contract
-
-- `Error: …` — model-visible and actionable (unknown tool, unknown node, empty args, pi
-  binary missing).
-- `Seam: …` — infrastructure fault (timeout, provider/serving error, empty stream). Kept
-  distinct so forensics can score harness unreliability separately from model error.
-
-Every dispatch also lands a `pi.appendEntry` record (node, model, tool, args, status,
-tool-call count, wall time, exit code, preview) in the session log.
-
-## Quick start
-
-Requirements:
-
-| what | version | why |
+| requirement | version | why |
 |---|---|---|
 | Node.js | ≥ 22.19 | pi's engine floor |
-| pi | **0.84.2** (pinned in `PI_VERSION`, installed by `npm ci`) | the extension API and the `-p --mode json` stream shape this code is verified against |
-| a model server | Ollama (or any OpenAI-compatible endpoint) | only for live use — the gates below need none |
-| a small tool-calling model | e.g. `qwen2.5-coder:7b` (placeholder) | override with `SCOUT_MODEL` |
-| `just` | optional | recipe runner for the gates |
+| pi | **0.84.2**, pinned in `PI_VERSION` and installed by `npm ci` | the extension API and the `-p --mode json` stream shape this code is verified against |
+| a model server | Ollama at `localhost:11434`, or any OpenAI-compatible endpoint | live use only; the offline gates need none |
+| a small tool-calling model | `qwen2.5:7b` is the placeholder | must actually emit tool calls through your server (see below) |
+| `just` | optional | recipe runner |
+
+## 30-second demo
+
+Live, from this export, against Ollama 0.32 on one machine. Orchestrator `qwen3-coder:30b`,
+three subagents on `qwen2.5:7b`, three bounded jobs in one `fanout` call:
 
 ```bash
-git clone <this repo> pi-fanout && cd pi-fanout
-npm ci                  # pinned pi + jiti + typescript
-npm run setup           # links pi's non-hoisted packages, checks PI_VERSION
-npm run typecheck       # tsc strict against pi's real .d.ts
-npm test                # mock suites: no model, no network, no subprocess
-npm run scan            # identifier-safety scan (a release gate)
+npm ci && npm run setup                 # pinned pi, linked, version-checked
+# merge config/models.json into ~/.pi/agent/models.json, then:
+ollama pull qwen2.5:7b && ollama pull qwen3-coder:30b
+export KINASE_ORCHESTRATOR=ollama/qwen3-coder:30b
+just demo                               # = scripts/demo.sh
 ```
 
-Live use (needs a model server):
+Output of `just demo`, 2026-09-12 local time (store timestamps are UTC; the store path is
+shortened, nothing else edited):
 
-```bash
-# 1. tell pi about your local server — merge config/models.json into ~/.pi/agent/models.json
-#    and make sure the model id there is one you have pulled:
-ollama pull qwen2.5-coder:7b
+```text
+orchestrator: ollama/qwen3-coder:30b   subagents: ollama/qwen2.5:7b   store: ./collected
 
-# 2. pick the scout model (provider/id, must match models.json)
-export SCOUT_MODEL=ollama/qwen2.5-coder:7b
+== fanout result (per-job manifest)
+  job 0  done       grep  node=local    6818 ms  runner-tool.ts:447:   pi.registerTool(
+  job 1  done       ls    node=local    5823 ms  demo.sh
+  job 2  done       read  node=local    5895 ms  0.84.2
+== fanout details: {"jobs":3,"ok":3,"statuses":["done","done","done"],"total_wall_ms":6820,"max_wall_ms":6818}
 
-# 3. load the tools into a session
-just ext          # = pi -e src/scout-tool.ts -e src/runner-tool.ts
+orchestrator tool calls: 1   fanout calls: 1   final text: "fanout complete"
+
+== collection store: ./collected/index.jsonl (last 3 records)
+  {"ts":"2026-09-13T01:03:22.160Z","phase":"collect","node":"local","tool":"ls","status":"done"}
+  {"ts":"2026-09-13T01:03:22.235Z","phase":"collect","node":"local","tool":"read","status":"done"}
+  {"ts":"2026-09-13T01:03:23.150Z","phase":"collect","node":"local","tool":"grep","status":"done"}
+DEMO OK
 ```
 
-Then, in the session: *"Use scout to find what port scripts/server.sh listens on."* or
+Three subprocesses ran at once: total wall time 6820 ms against a slowest job of 6818 ms.
+Each record carries `tool_calls: 1` and the verbatim tool output; the orchestrator made one
+call and received that same array.
+
+Interactively: `just ext` loads the four tools into a pi session. Then, in the session:
 *"Use fanout to grep for TODO in src/ and test/ as two jobs."*
 
-To install permanently, add this directory to `packages` in `~/.pi/agent/settings.json`
-(the `pi` manifest in `package.json` lists both extensions).
+**On placeholder models.** The first live run used `qwen2.5-coder:7b` as the subagent.
+Through Ollama it never invoked its tool: it echoed the call as JSON text, invented output,
+and typed `DONE`. The classifier now files that as `no_call`; re-run with that model, all
+three jobs came back `no_call`, `tool_calls: 0`, one reporting a version that does not
+exist. `qwen2.5:7b`, `llama3.1:8b`, `granite4.1:3b` and `gemma4:e4b` did call the tool.
 
-## Nodes
+## Verify without a model
 
-A **node** is a name that maps to a `provider/model` ref. Out of the box there is one node,
-`local`, pointing at the placeholder model on your own machine. Add more by pointing a
-provider in `models.json` at another machine's server and naming it:
+Three gates, all offline, all in CI:
 
 ```bash
-export SCOUT_MODEL=ollama/qwen2.5-coder:7b          # the "local" node
-export SCOUT_MODEL_GPU2=gpu2/qwen2.5-coder:7b       # defines node "gpu2" (provider "gpu2" in models.json)
-export SCOUT_DEFAULT_NODE=gpu2                       # where an unqualified job goes (default: local)
+npm run typecheck   # tsc --strict over src/ against pi's installed .d.ts
+npm test            # 182 checks: the real extension files loaded through jiti with a
+                    # mocked pi API, an injected spawner and an in-memory filesystem
+npm run scan        # identifier-safety scan over every tracked text file
 ```
 
-`fanout` jobs on different nodes run on different machines; jobs on the same node share that
-node's GPU. An unknown node name is a model-visible `Error:` listing the known nodes.
+The mock suites cover tolerance for renamed arguments (small models rename parameters), the
+subagent command line, the status classifier including `no_call`, fanout isolation and a
+concurrency proof, the store's write path and recall's budget. The scan fails on any IP,
+ticket id, vendor console URL, credential-shaped assignment, hash or home path, plus an
+`IP_SCAN_PRIVATE_TERMS` list held as a CI secret. `scripts/ip_scan_selftest.sh` is its
+positive control: a planted tree must fail, a clean tree must pass. That control caught two
+patterns that had been silently dead under GNU grep.
 
-## Environment knobs
+## Configuration
 
-| variable | default | meaning |
-|---|---|---|
-| `SCOUT_MODEL` | `ollama/qwen2.5-coder:7b` | model ref for node `local` |
-| `SCOUT_MODEL_<NAME>` | — | define node `<name>` |
-| `SCOUT_DEFAULT_NODE` | `local` | node for jobs that omit `node` |
-| `SCOUT_PI_BIN` / `RUNNER_PI_BIN` | `./node_modules/.bin/pi`, else `pi` | pi binary to spawn |
-| `SCOUT_THINKING` | provider default | `off` forces `--thinking off` for scout (runner always off) |
-| `SCOUT_TIMEOUT_MS` | 180000 | scout per-call timeout |
-| `SCOUT_MAX_CHARS` | 4000 | scout answer cap |
-| `RUNNER_TIMEOUT_MS` | 300000 | runner/fanout per-job timeout |
-| `RUNNER_MAX_CHARS` | 8000 | caller-facing result cap (the store keeps the full text) |
-| `RUNNER_MAX_FANOUT` | 8 | jobs per fanout call |
-| `RUNNER_COLLECT_DIR` | unset = off | collection store directory |
-| `RUNNER_COLLECT_MAX_INLINE` | 32768 | inline result cap before a sidecar |
-| `RUNNER_COLLECT_PHASE` | `collect` | phase label on filed records |
-| `RUNNER_RECALL_MAX_CHARS` | 16000 | total full-text budget per `recall` call |
+`SCOUT_MODEL` names the `local` node's model, `SCOUT_MODEL_<NAME>` adds a node per machine,
+`RUNNER_COLLECT_DIR` turns the store on. The headers of `src/scout-tool.ts` and
+`src/runner-tool.ts` list every knob with its default.
 
-## Verification
+## Roadmap
 
-Nothing here is "done" on reading right. Three gates, all offline:
+Profiles, each a small directory of tool allowlists, node maps and prompts over the same
+harness: **learning**, **coding**, **research**, **threat intel**, and **red / blue / purple**
+team exercises. The harness gains a profile loader.
 
-1. `npm run typecheck` — `tsc --strict` over `src/` against the installed pi `.d.ts`.
-2. `npm test` — `test/run-scout-tool.mjs` (37 checks) and `test/run-runner-tool.mjs`
-   (138 checks) load the real extension files through jiti with a mocked pi API and an
-   injected spawner and filesystem. They cover argument-drift coercion, the argv shape, the
-   status classifier, isolation and a concurrency proof for fanout, the store's write path,
-   and recall's budget logic. The runner unsets inherited `SCOUT_*`/`RUNNER_*` env so a
-   session's settings cannot leak into the assertions.
-3. `npm run scan` — `scripts/ip_scan.sh` greps every tracked text file for identifiers that
-   commonly leak from private repos (private and public IPs, UUIDs, ticket ids, vendor console
-   URLs, corporate hostname schemes, credentials, hashes, home paths) and fails on any HIGH/MED
-   hit. Reusable as a release gate in any repo.
+## Provenance
 
-The live path is verified separately and manually: start a model server, `just ext`, and
-watch `pi.appendEntry` records land in the session log.
-
-## Layout
-
-```
-src/scout-tool.ts        scout: single-fact repo lookup subagent
-src/runner-tool.ts       runner + fanout + recall (shared dispatch spine, injected spawn/fs)
-src/lib/scout-core.ts    stream parser, arg coercion, node table, scout prompt   (pure)
-src/lib/runner-core.ts   tool inheritance, argv, runner prompt, status classifier (pure)
-src/lib/collect-core.ts  record schema, sidecar split, filter, budget helpers    (pure)
-test/run-*.mjs           jiti mock suites
-scripts/setup.sh         link pi packages, check PI_VERSION
-scripts/run-suites.sh    suite runner (exit code AND "ALL PASSED" marker)
-scripts/ip_scan.sh       identifier-safety gate
-config/models.json       minimal Ollama provider stanza for ~/.pi/agent/models.json
-justfile                 setup / gate-tsc / gate-jiti / gate-scan / gate / ext
-PI_VERSION               0.84.2
-```
-
-## Design notes
-
-- **Explicit dispatch, not autonomy.** The caller names tool and args. A subagent that
-  chooses its own tools is the regime where small models fail.
-- **Bare subagents.** `--no-extensions --no-skills --no-context-files --thinking off`. Any
-  harness behavior the parent carries would suppress a small model's tool calling.
-- **Never trust the sentinel alone.** Status is classified from stream events; the model's
-  `DONE` is one input.
-- **Arg-drift tolerance.** Small models rename parameters (`tool_name`, `arguments`,
-  `target`) and double-encode arrays as strings with trailing commas. Every entry point
-  coerces before it validates.
-- **Best-effort audit, never-fail dispatch.** A logging or filing fault is recorded and
-  swallowed; the live return is the source of truth.
-- **Pinned dependency.** pi's extension API moves. `PI_VERSION` names the version this code
-  was verified against; `scripts/setup.sh` warns on drift.
+Extracted from a larger private harness where this code ran daily. Everything specific to
+the original domain stayed behind; the identifier scan is the gate that says so.
 
 ## License
 
-Apache-2.0. See `LICENSE`.
+Apache-2.0. Copyright 2026 Mark Peters. See `LICENSE`.
