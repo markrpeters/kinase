@@ -1,0 +1,35 @@
+{
+  "name": "pi-fanout",
+  "version": "0.1.0",
+  "description": "scout / runner / fanout: delegate bounded tool calls to cheap local-model subagents from a pi session, concurrently, with code-owned dispatch and an append-only collection store",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bash scripts/run-suites.sh",
+    "scan": "bash scripts/ip_scan.sh . scan-out",
+    "verify": "npm run setup && npm run typecheck && npm test && npm run scan"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "jiti": "^2.7.0",
+    "typescript": "^5.9.3"
+  },
+  "pi": {
+    "extensions": [
+      "./src/scout-tool.ts",
+      "./src/runner-tool.ts"
+    ]
+  }
+}

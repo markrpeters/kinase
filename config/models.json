@@ -1,0 +1,21 @@
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "maxTokensField": "max_tokens"
+      },
+      "models": [
+        {
+          "id": "qwen2.5-coder:7b",
+          "name": "placeholder small scout model — replace with any small tool-calling model you have pulled",
+          "contextWindow": 32768
+        }
+      ]
+    }
+  }
+}
