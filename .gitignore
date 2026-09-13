@@ -1,0 +1,4 @@
+node_modules/
+*.log
+scan-out/
+.DS_Store
