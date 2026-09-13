@@ -1,4 +1,4 @@
-# pi-fanout task runner. Install just: `apt install just` / `brew install just` / `cargo install just`.
+# kinase task runner. Install just: `apt install just` / `brew install just` / `cargo install just`.
 
 _root := justfile_directory()
 
@@ -18,13 +18,18 @@ gate-tsc:
 gate-jiti:
     bash {{_root}}/scripts/run-suites.sh
 
-# identifier-safety scan over tracked files (fails on any HIGH/MED hit)
+# identifier-safety scan over tracked files (fails on any HIGH/MED hit), then its positive control
 gate-scan:
     bash {{_root}}/scripts/ip_scan.sh {{_root}} {{_root}}/scan-out
+    bash {{_root}}/scripts/ip_scan_selftest.sh
 
-# every gate
+# every offline gate
 gate: gate-tsc gate-jiti gate-scan
 
 # interactive pi session with scout + runner + fanout + recall loaded (needs a model server)
 ext:
     cd {{_root}} && pi -e {{_root}}/src/scout-tool.ts -e {{_root}}/src/runner-tool.ts
+
+# non-interactive live fanout: 3 bounded jobs, prints the manifest (needs a model server)
+demo:
+    bash {{_root}}/scripts/demo.sh

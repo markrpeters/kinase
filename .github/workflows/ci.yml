@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install pinned pi + toolchain
+        run: npm ci
+
+      - name: Link pi's non-hoisted packages, check PI_VERSION
+        run: npm run setup
+
+      - name: tsc --strict against pi's installed .d.ts
+        run: npm run typecheck
+
+      - name: Mock suites (no model, no network, no subprocess)
+        run: npm test
+
+      - name: Identifier-safety scan (fails on any HIGH/MED hit)
+        env:
+          IP_SCAN_PRIVATE_TERMS: ${{ secrets.IP_SCAN_PRIVATE_TERMS }}
+        run: bash scripts/ip_scan.sh . scan-out
+
+      - name: Scan positive control (planted identifiers must fail)
+        run: bash scripts/ip_scan_selftest.sh

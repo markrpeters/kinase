@@ -11,8 +11,13 @@
       },
       "models": [
         {
-          "id": "qwen2.5-coder:7b",
-          "name": "placeholder small scout model — replace with any small tool-calling model you have pulled",
+          "id": "qwen2.5:7b",
+          "name": "placeholder small subagent model — any small model that actually emits tool calls through your server (verified: qwen2.5:7b, llama3.1:8b, granite4.1:3b, gemma4:e4b)",
+          "contextWindow": 32768
+        },
+        {
+          "id": "qwen3-coder:30b",
+          "name": "placeholder orchestrator — any tool-calling model large enough to emit one well-formed fanout call; the subagents stay small",
           "contextWindow": 32768
         }
       ]

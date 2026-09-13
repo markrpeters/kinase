@@ -1,4 +1,7 @@
 node_modules/
 *.log
 scan-out/
+collected/
+.env
+*.private
 .DS_Store

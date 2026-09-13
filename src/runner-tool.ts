@@ -166,7 +166,7 @@ function safeAppend(pi: ExtensionAPI, type: string, data: Record<string, unknown
 }
 
 /** The single mapping from a DispatchOutcome to its reportable status string, so fanout's
- * per-job result and the collection filer never diverge (done|abort|tool_error|unknown for a
+ * per-job result and the collection filer never diverge (done|abort|tool_error|no_call|unknown for a
  * successful dispatch; error|seam for a failed one). */
 function outcomeStatus(o: DispatchOutcome): string {
   return o.ok ? o.status ?? "unknown" : o.errorKind ?? "error";
@@ -385,9 +385,13 @@ async function dispatchOne(
     }
 
     const parsed = parseRunnerStream(res.stdout);
-    fullText = parsed.text; // capture the full result BEFORE the caller-facing cap
-    const text = parsed.text.slice(0, cfg.maxChars);
-    const truncated = parsed.text.length > cfg.maxChars;
+    fullText = parsed.text; // the UNTRUNCATED narration, for the store's scout_note
+    // Caller-facing body: the VERBATIM tool result when the stream carried one, else the
+    // narration. Seen live: a 7B scout's narration of a grep was "olkien" + the call echoed
+    // as JSON while the lifted tool result was the five real matches. The caller gets data.
+    const body = parsed.toolResult !== "" ? parsed.toolResult : parsed.text;
+    const text = body.slice(0, cfg.maxChars);
+    const truncated = body.length > cfg.maxChars;
 
     safeAppend(pi, "runner", {
       via,
@@ -455,7 +459,7 @@ export default function (pi: ExtensionAPI, deps: { spawnPi?: SpawnPi; fs?: Colle
         "Only delegate a tool already active in this session; pass its arguments exactly as that tool expects.",
         "The runner does not reason — it makes the one call you specify and reports the result. Interpret the result yourself.",
         "For several delegations at once, use `fanout` (concurrent) rather than many sequential runner calls.",
-        "Check details.status: 'done' succeeded, 'abort' means the scout could not run it (read the reason), 'unknown' means no status line was emitted.",
+        "Check details.status: 'done' succeeded, 'abort' means the scout could not run it (read the reason), 'no_call' means the model never invoked the tool (its text is fabricated), 'unknown' means no status line was emitted.",
       ],
       parameters: Type.Object({
         tool: Type.String({ description: "Name of an action/data tool active in this session to delegate (e.g. 'grep')." }),
@@ -470,7 +474,7 @@ export default function (pi: ExtensionAPI, deps: { spawnPi?: SpawnPi; fs?: Colle
         const o = await dispatchOne(pi, spawnPi, fs, cfg, job, "runner");
         if (!o.ok) throw new Error(o.message);
         const marker =
-          o.status === "abort" ? `[runner ABORT on ${o.node}]\n` : o.status === "tool_error" ? `[runner tool_error on ${o.node}]\n` : "";
+          o.status === "abort" ? `[runner ABORT on ${o.node}]\n` : o.status === "tool_error" ? `[runner tool_error on ${o.node}]\n` : o.status === "no_call" ? `[runner no_call on ${o.node} — the model never invoked ${o.tool}; treat the text as fabricated]\n` : "";
         return {
           content: [{ type: "text" as const, text: marker + o.text! }],
           details: { status: o.status, node: o.node, model: o.model, tool: o.tool, tool_calls: o.tool_calls, chars: (o.text ?? "").length, truncated: o.truncated, wall_ms: o.wall_ms },
@@ -495,7 +499,7 @@ export default function (pi: ExtensionAPI, deps: { spawnPi?: SpawnPi; fs?: Colle
       promptGuidelines: [
         "Each job = {tool, args, node}: tool must be active in this session, args exactly as it expects, node a configured node name (default 'local').",
         "Spread jobs across different nodes to actually parallelize; jobs on the same node share that node's GPU.",
-        "Read each job's status in the returned array: 'done'/'abort'/'unknown', or 'error'/'seam' if that one job could not run. Other jobs still return.",
+        "Read each job's status in the returned array: 'done'/'abort'/'no_call'/'unknown', or 'error'/'seam' if that one job could not run. Other jobs still return. 'result' is the verbatim tool output when the tool ran.",
         "Interpret the results yourself — the scouts only run the calls and report.",
       ],
       parameters: Type.Object({
@@ -529,8 +533,8 @@ export default function (pi: ExtensionAPI, deps: { spawnPi?: SpawnPi; fs?: Colle
           job: i,
           node: o.node,
           tool: o.tool,
-          status: outcomeStatus(o), // done|abort|tool_error|unknown | error|seam
-          ...(o.ok ? { result: o.text } : { error: o.message }),
+          status: outcomeStatus(o), // done|abort|tool_error|no_call|unknown | error|seam
+          ...(o.ok ? { result: o.text, tool_calls: o.tool_calls } : { error: o.message }),
           wall_ms: o.wall_ms,
         }));
         const okCount = outcomes.filter((o) => o.ok).length;
@@ -579,7 +583,7 @@ export default function (pi: ExtensionAPI, deps: { spawnPi?: SpawnPi; fs?: Colle
       parameters: Type.Object({
         tool: Type.Optional(Type.String({ description: "Only records for this delegated tool (e.g. 'grep')." })),
         node: Type.Optional(Type.String({ description: "Only records from this node (e.g. 'local')." })),
-        status: Type.Optional(Type.String({ description: "Only this status: 'done' | 'abort' | 'tool_error' | 'unknown' | 'error' | 'seam'." })),
+        status: Type.Optional(Type.String({ description: "Only this status: 'done' | 'abort' | 'tool_error' | 'no_call' | 'unknown' | 'error' | 'seam'." })),
         phase: Type.Optional(Type.String({ description: "Only records filed under this phase label (default filing phase is 'collect')." })),
         since: Type.Optional(Type.String({ description: "Only records at/after this ISO-8601 timestamp." })),
         limit: Type.Optional(Type.Number({ description: "Keep only the most recent N matching records." })),

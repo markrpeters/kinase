@@ -28,7 +28,7 @@ export interface CollectRecord {
   model: string;
   tool: string;
   args: unknown;
-  status: string; // done|abort|tool_error|unknown | error|seam
+  status: string; // done|abort|tool_error|no_call|unknown | error|seam
   tool_calls: number;
   wall_ms: number;
   result_chars: number;

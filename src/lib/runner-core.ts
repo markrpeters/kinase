@@ -221,7 +221,7 @@ export function buildRunnerUserMessage(toolName: string, args: Record<string, un
   return lines.join("\n");
 }
 
-export type RunnerStatus = "done" | "abort" | "tool_error" | "unknown";
+export type RunnerStatus = "done" | "abort" | "tool_error" | "no_call" | "unknown";
 
 export interface RunnerStream {
   status: RunnerStatus;
@@ -282,20 +282,30 @@ export function lastToolResult(stdout: string): string {
  *   abort      — the scout explicitly bailed (ABORT sentinel), the most informative signal;
  *   tool_error — the delegated tool call itself errored (tool_execution_end isError), a real
  *                outcome the harness surfaces even if the model mistakenly typed DONE;
- *   done       — DONE sentinel, no tool error;
+ *   no_call    — the stream carries NO tool_execution_start: the model never invoked its
+ *                one tool, so whatever it "reported" is fabricated. Seen live: a small
+ *                model echoes the call as JSON text, invents output, types DONE. A DONE
+ *                with zero calls is therefore never "done". (An EMPTY stream with no
+ *                call stays unknown — nothing was reported, so nothing was fabricated;
+ *                dispatch turns it into a Seam anyway.)
+ *   done       — DONE sentinel, at least one tool call, no tool error;
  *   unknown    — no sentinel (the caller still gets the raw text, never blind).
- * Sentinels match on their own line, case-sensitive, to avoid tripping on prose. */
+ * ABORT matches on its own line; DONE on its own line or as the final token — both
+ * case-sensitive, to avoid tripping on prose. */
 export function parseRunnerStream(stdout: string): RunnerStream {
   const base = parseScoutStream(stdout);
   const hasAbort = /(^|\n)\s*ABORT\b/.test(base.answer);
-  const hasDone = /(^|\n)\s*DONE\s*(\n|$)/.test(base.answer);
+  // DONE on its own line, or as the last token of the reply ("0.84.2 DONE" — seen live).
+  const hasDone = /(^|\n)\s*DONE\s*(\n|$)/.test(base.answer) || /\bDONE\s*$/.test(base.answer);
   const status: RunnerStatus = hasAbort
     ? "abort"
     : base.toolErrors > 0
       ? "tool_error"
-      : hasDone
-        ? "done"
-        : "unknown";
+      : base.toolCalls === 0 && base.answer !== ""
+        ? "no_call"
+        : hasDone
+          ? "done"
+          : "unknown";
   return {
     status,
     text: base.answer,
