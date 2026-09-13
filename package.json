@@ -1,5 +1,5 @@
 {
-  "name": "@pricklypete/kinase",
+  "name": "@markrpeters/kinase",
   "version": "0.1.0",
   "description": "A harness that activates agents: scouts, fanout, and a runner over pi.",
   "author": "Mark Peters",
