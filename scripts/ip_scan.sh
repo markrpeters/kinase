@@ -15,7 +15,7 @@
 # Severity: HIGH = must never ship; MED = almost always a leak, review and remove;
 # LOW = usually benign, listed for the reviewer.
 #
-# IP_SCAN_PRIVATE_TERMS (optional): comma- or newline-separated literal terms that must
+# IP_SCAN_PRIVATE_TERMS (optional): comma-, pipe- or newline-separated literal terms that must
 # never appear in the tree (an employer name, an internal project codename, a hostname
 # scheme). Scanned case-insensitively as one extra HIGH pattern. In CI this comes from a
 # repository secret so the terms themselves never land in the public tree.
@@ -73,7 +73,7 @@ scan MED  customer -iE '\b(customer|client name|clientname|account name|acct)\b'
 scan MED  work_ids -E '\b(W|P[12]-|DD-|H)[0-9]{1,3}[a-z]?\b'
 if [ -n "${IP_SCAN_PRIVATE_TERMS:-}" ]; then
   # literal terms -> one escaped ERE alternation; blank entries dropped
-  terms_re="$(printf '%s' "$IP_SCAN_PRIVATE_TERMS" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' \
+  terms_re="$(printf '%s' "$IP_SCAN_PRIVATE_TERMS" | tr ',|' '\n\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' \
     | sed -e 's/[][\.*^$+?(){}|\\\/]/\\&/g' | paste -sd'|' -)"
   [ -n "$terms_re" ] && scan HIGH private_terms -i "$terms_re"
 else

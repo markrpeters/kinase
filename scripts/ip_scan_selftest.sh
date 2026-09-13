@@ -38,7 +38,7 @@ echo "== private terms: a planted term must FAIL the scan"
 mkrepo "$T/term"
 echo "internal codename: Project Zebra (do not ship)" > note.txt
 git add -A && git commit -qm plant
-if IP_SCAN_PRIVATE_TERMS="fictional-employer, project zebra" bash ip_scan.sh . "$T/out-term" > "$T/term.log" 2>&1; then
+if IP_SCAN_PRIVATE_TERMS="fictional-employer|project zebra" bash ip_scan.sh . "$T/out-term" > "$T/term.log" 2>&1; then
   echo "SELFTEST FAILED: private term not caught"; cat "$T/term.log"; exit 1
 fi
 [ -s "$T/out-term/private_terms.txt" ] || { echo "SELFTEST FAILED: private_terms.txt empty"; cat "$T/term.log"; exit 1; }
