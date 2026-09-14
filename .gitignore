@@ -5,3 +5,4 @@ collected/
 .env
 *.private
 .DS_Store
+scan-results/

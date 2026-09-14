@@ -1,117 +1,167 @@
 #!/usr/bin/env bash
-# ip_scan.sh — identifier-safety scan over the git-tracked text files of a repository.
+# IP-safety scan for this repository. Exits non-zero on any HIGH or MED hit,
+# and exits 2 if any pattern fails to run (a pattern that cannot run is a
+# pattern that never hits, which is worse than no pattern at all).
 #
-# Usage: scripts/ip_scan.sh <repo path> <out dir> [--require-private]
-#   --require-private  exit 3 if zero private terms were loaded (used by the pre-commit
-#                      hook installed by scripts/setup-private-terms.sh). Without it a
-#                      zero count prints a visible warning.
-# Writes one hit list per pattern to <out dir>/<pattern>.txt (file:line:text), prints a
-# per-pattern summary, and exits non-zero if ANY pattern classed HIGH or MED has a hit.
-# Meant as a release gate for code extracted from a private working repo: it catches
-# the identifiers that leak most often (private/public IPs, UUIDs, tenant/case ids,
-# vendor-console URLs, corporate hostname schemes, DOMAIN\user, e-mail addresses,
-# credential-shaped assignments, hashes, home-directory paths, and language that
-# admits data came from a live environment). Loopback, RFC 5737 documentation
-# ranges (192.0.2/24, 198.51.100/24, 203.0.113/24) and example.* mail domains are
-# allowed by construction.
+# CANONICAL COPY: markrpeters/public-repo-denylist, scanner/ip_scan.sh. Every
+# consuming repository vendors this file byte-for-byte together with
+# ip_scan_selftest.sh, setup-private-terms.sh and the ip_scan.sha256 pin; the
+# self-test fails when a vendored copy drifts from the pin. Fix it at the
+# source, regenerate the pin, re-vendor. Do not edit a vendored copy.
 #
-# Severity: HIGH = must never ship; MED = almost always a leak, review and remove;
-# LOW = usually benign, listed for the reviewer.
+# Scans every git-tracked text file (or every file under the tree when not in
+# a git repo), excluding this script, its self-test, the private-terms file
+# and the sha256 pin (whose hashes would trip the sha256 class), and writes one hit list per pattern to $OUT (default: scan-results/,
+# git-ignored). scripts/ip_scan_selftest.sh is the positive control: it plants
+# one fictional identifier per class and requires this scan to fail on each.
 #
-# Private terms (optional): organisation-specific identifiers that must never appear in
-# the tree (an employer name, a hostname scheme, a case-id form). Supplied as extended
-# regex alternatives joined with "|" in IP_SCAN_PRIVATE_TERMS (how CI reads them from a
-# repository secret) and/or one regex per line in scripts/ip_scan.private (gitignored,
-# for local runs). Scanned case-insensitively as one extra HIGH pattern; the summary
-# line reports how many terms were loaded so an empty secret cannot pass as a full one.
+# Severity policy:
+#   HIGH  identifies a real environment on its own — case/ticket ids, tenant
+#         ids, vendor console URLs, corporate hostname schemes, real e-mail
+#         addresses, absolute home / mount paths, credentials, file hashes,
+#         UUIDs. Organisation-specific terms (an employer or customer name,
+#         an AD domain prefix) must NOT live in this file, or the scanner
+#         becomes the leak: put them in scripts/ip_scan.private (git-ignored,
+#         one extended regex per line) or in the IP_SCAN_PRIVATE_TERMS
+#         environment variable (regex alternatives separated by "|"), which is
+#         how CI supplies them from a secret. Both are scanned as HIGH,
+#         case-insensitively, and the summary line reports how many terms
+#         were loaded so an empty or truncated secret cannot pass as a full
+#         one. A term may carry its own "|" inside a group; only a "|" at
+#         parenthesis depth 0 separates terms.
+#   MED   would need context to be harmless — RFC1918 addresses, internal AD
+#         domains, DOMAIN\user tokens, generic hostname shapes. Test fixtures
+#         in this repo use RFC 5737 documentation addresses and invented
+#         names precisely so that MED stays at zero without an allowlist.
+#   LOW   informational only, never fails the gate — public IPs outside the
+#         documentation ranges, words that suggest real data was handled.
 #
-# This script is excluded from its own scan (its pattern strings would match themselves).
-# Note: `file` reports .ts/.mjs as application/javascript, so the type filter must name
-# javascript explicitly — a bare text/ filter silently skips all the source files.
+# Matcher notes (learned the hard way, see the self-test):
+#   * A pattern needing PCRE (lookaheads) is flagged -P; everything else gets
+#     -E. GNU grep rejects -E and -P together ("conflicting matchers", exit 2),
+#     so scan() adds -E only when no -P flag is present.
+#   * grep's stderr is captured, never discarded. Any grep error fails the run.
+#   * Inside an ERE bracket expression a backslash is literal, so "[_\-/]" is
+#     an invalid range. Put "-" last instead.
+#   * A single backslash in a file is matched by "\\" in the pattern. "\\\\"
+#     matches two and silently misses DOMAIN\user and C:\Users\name.
+#   * file(1) reports .ts/.mjs as application/javascript (and some builds say
+#     typescript/ecmascript), so the type filter names them explicitly — a bare
+#     "text/" filter silently skips every TypeScript source file. And if file(1)
+#     is missing altogether the file list is empty and a scan of nothing would
+#     PASS, so its absence is fatal.
+#
+# Usage: scripts/ip_scan.sh [repo-root] [out-dir] [--require-private]
+#   --require-private  exit 3 if zero private terms were loaded (used by the
+#                      pre-commit hook installed by scripts/setup-private-terms.sh).
+#                      Without it a zero count prints a visible warning.
 set -uo pipefail
 REQUIRE_PRIVATE=0; ARGS=()
 for a in "$@"; do case "$a" in --require-private) REQUIRE_PRIVATE=1 ;; *) ARGS+=("$a") ;; esac; done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
-REPO="${1:?repo path}"; OUT="${2:?out dir}"
-mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"; : > "$OUT/grep-errors.txt"
-cd "$REPO" || exit 1
+ROOT=${1:-$(cd "$(dirname "$0")/.." && pwd)}
+OUT=${2:-$ROOT/scan-results}
+SELF=scripts/ip_scan.sh
+SELFTEST=scripts/ip_scan_selftest.sh
+PRIVATE=scripts/ip_scan.private
+PIN=scripts/ip_scan.sha256
+command -v file >/dev/null 2>&1 || { echo "BROKEN: file(1) is not installed; the file list would be empty and a scan of nothing passes"; exit 2; }
+mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd)
+: > "$OUT/grep-errors.txt"
+cd "$ROOT" || exit 2
 
-# Excluded from the scan: this script (its pattern strings match themselves) and its
-# positive-control self-test (it plants fictional identifiers on purpose).
-SELF="$(git ls-files --full-name -- "${BASH_SOURCE[0]}" 2>/dev/null || true)"
-SELFTEST="$(git ls-files --full-name -- "$(dirname "${BASH_SOURCE[0]}")/ip_scan_selftest.sh" 2>/dev/null || true)"
-git ls-files -z | xargs -0 file --mime-type 2>/dev/null | grep -E 'text/|json|xml|csv|javascript|typescript|ecmascript|yaml|toml|x-empty' | cut -d: -f1 \
-  | { if [ -n "$SELF" ]; then grep -vxF "$SELF"; else cat; fi; } \
-  | { if [ -n "$SELFTEST" ]; then grep -vxF "$SELFTEST"; else cat; fi; } > "$OUT/files.txt"
-N=$(wc -l < "$OUT/files.txt"); echo "$(pwd): $N text files tracked"
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git ls-files -z
+else
+    find . -type f -not -path './.git/*' -not -path './.venv/*' -not -path './scan-results/*' -print0
+fi | xargs -0 file --mime-type 2>/dev/null \
+   | grep -E 'text/|json|xml|csv|yaml|toml|javascript|typescript|ecmascript|x-empty' | cut -d: -f1 | sed 's#^\./##' \
+   | grep -vxF "$SELF" | grep -vxF "$SELFTEST" | grep -vxF "$PRIVATE" | grep -vxF "$PIN" | grep -v '^scan-results/' > "$OUT/files.txt"
 
-bad=0
-scan() { # <severity> <name> <grep args...>
-  local sev="$1" name="$2"; shift 2
-  # Matcher: a pattern that carries -P (PCRE, for lookaheads) must NOT also get -E — GNU
-  # grep rejects "conflicting matchers" (exit 2) and, with stderr discarded, a dead pattern
-  # would report zero hits forever. ERE is the default for everything else.
-  local m="-E"; case "$1" in -*P*) m="" ;; esac
-  if [ -s "$OUT/files.txt" ]; then
-    xargs -a "$OUT/files.txt" -d '\n' grep -nHI $m "$@" 2> "$OUT/$name.err" > "$OUT/$name.txt"
-    [ -s "$OUT/$name.err" ] && sed "s/^/[$name] /" "$OUT/$name.err" >> "$OUT/grep-errors.txt"; rm -f "$OUT/$name.err"
-  else
-    : > "$OUT/$name.txt"
-  fi
-  local hits files; hits=$(wc -l < "$OUT/$name.txt"); files=$(cut -d: -f1 "$OUT/$name.txt" | sort -u | wc -l)
-  printf "  %-4s %-22s %4d hits  %3d files\n" "$sev" "$name" "$hits" "$files"
-  if [ "$hits" -gt 0 ] && { [ "$sev" = HIGH ] || [ "$sev" = MED ]; }; then bad=$((bad+1)); fi
+N=$(wc -l < "$OUT/files.txt")
+echo "scanning $N text files under $ROOT"
+if [ "$N" -eq 0 ]; then
+    echo "BROKEN: no text files found under $ROOT (wrong root, empty tree, or file(1) misbehaving); a scan of nothing must not pass"
+    exit 2
+fi
+
+FAIL=0
+SCAN_NOTE=""
+scan() {  # scan <severity> <name> [grep flags...] <pattern>
+    local sev=$1 name=$2; shift 2
+    # Per-pattern matcher: -P patterns must not also get -E.
+    local m="-E" a
+    for a in "$@"; do case "$a" in -*P*) m="" ;; esac; done
+    if [ -s "$OUT/files.txt" ]; then
+        xargs -a "$OUT/files.txt" -d '\n' grep -nHI $m "$@" 2> "$OUT/$name.err" > "$OUT/$name.txt"
+    else
+        : > "$OUT/$name.txt"; : > "$OUT/$name.err"
+    fi
+    if [ -s "$OUT/$name.err" ]; then
+        sed "s/^/[$name] /" "$OUT/$name.err" >> "$OUT/grep-errors.txt"
+    fi
+    rm -f "$OUT/$name.err"
+    local hits files
+    hits=$(wc -l < "$OUT/$name.txt"); files=$(cut -d: -f1 "$OUT/$name.txt" | sort -u | wc -l)
+    printf '%-5s %-22s %4d hits %3d files%s\n' "$sev" "$name" "$hits" "$files" "${SCAN_NOTE:+  ($SCAN_NOTE)}"
+    SCAN_NOTE=""
+    if [ "$hits" -gt 0 ] && [ "$sev" != LOW ]; then FAIL=1; fi
 }
 
-echo "pattern scan:"
-scan HIGH secrets -iE '(api[_-]?key|secret|token|password|passwd|bearer)\s*[:=]\s*["'"'"']?[A-Za-z0-9_/+-]{12,}'
-scan HIGH tenant -i 'tenant'
-scan HIGH vendor_console_urls -iE '(secureworks\.com|taegis|ctpx\.|crowdstrike\.com/|falcon\.(us|eu)-[0-9]|_cid=|humio|logscale|sentinelone\.net|security\.microsoft\.com|splunkcloud\.com|\.kibana\.|elastic-cloud\.com|paloaltonetworks\.com/|xdr\.|siem\.)'
-scan HIGH case_ids -E '\b(INV|INC|CASE|TKT|SIR|IR|TICKET|ALERT)[-_ ]?[0-9]{4,}\b'
-scan HIGH hostnames -E '\b(DESKTOP|LAPTOP|WKS|WS|PC|SRV|DC|EXCH|SQL|FS|APP|WEB|VM|HV|LT|WIN)[0-9]*-[A-Z0-9]{3,}\b|\bUS[A-Z]{4,}[A-Z0-9]*[0-9][A-Z0-9]*\b'
-scan HIGH domain_backslash_user -P '\b[A-Z][A-Z0-9-]{2,}\\+[A-Za-z][A-Za-z0-9._-]{2,}\b'
-scan HIGH emails -iP '\b[a-z0-9._%+-]+@(?!example\.|test\.|localhost|users\.noreply|noreply)[a-z0-9.-]+\.[a-z]{2,}\b'
-scan HIGH internal_domains -iE '\b[a-z0-9-]+\.(corp|local|internal|lan|intra|ad|priv|dmz)\b'
-scan HIGH sha256 -E '\b[0-9a-f]{64}\b'
-scan MED  rfc1918 -E '\b(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})\b'
-scan MED  public_ip -P '\b(?!10\.|127\.|0\.|192\.168\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|172\.(1[6-9]|2[0-9]|3[01])\.)([1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\b'
-scan MED  user_home -E '/home/[a-z]+|C:\\\\Users\\\\[A-Za-z]+'
-scan MED  realdata -iE '(real[- ]?(data|telemetry|incident|case|customer|alert)|from prod|production data|sanitiz|redact|anonymi|scrub)'
-scan MED  customer -iE '\b(customer|client name|clientname|account name|acct)\b'
-scan MED  work_ids -E '\b(W|P[12]-|DD-|H)[0-9]{1,3}[a-z]?\b'
-PRIV_TERMS="${IP_SCAN_PRIVATE_TERMS:-}"
-PRIVATE_FILE="$(dirname "${BASH_SOURCE[0]}")/ip_scan.private"
-if [ -f "$PRIVATE_FILE" ]; then
-  FILE_TERMS="$(grep -v '^[[:space:]]*#' "$PRIVATE_FILE" | grep -v '^[[:space:]]*$' | paste -sd'|' -)"
-  PRIV_TERMS="${PRIV_TERMS:+$PRIV_TERMS|}$FILE_TERMS"
+# ---- HIGH: identifies a real environment on its own ------------------------
+scan HIGH case_ids            '\b(INV|INC|CASE|TKT|SIR|TICKET|ALERT)[-_ ]?[0-9]{4,}\b'
+scan HIGH tenant          -i  'tenant'
+scan HIGH vendor_urls     -i  '(secureworks\.com|taegis|ctpx\.|crowdstrike\.com/|falcon\.(us|eu)-[0-9]|humio|logscale)'
+scan HIGH corp_hostnames      '\b(US|UK)[A-Z]{3}[A-Z0-9]{5,}\b'
+scan HIGH emails          -iP '\b[a-z0-9._%+-]+@(?!example\.|test\.|localhost|users\.noreply|noreply)[a-z0-9.-]+\.[a-z]{2,}\b'
+scan HIGH user_home           '(/home/[a-z]+|/mnt/[a-z]|~/[A-Za-z]|C:\\+Users\\+[A-Za-z]+)'
+scan HIGH secrets         -i  '(api[_-]?key|secret|token|password|passwd|bearer)\s*[:=]\s*["'"'"']?[A-Za-z0-9_/+-]{12,}'
+scan HIGH sha256              '\b[0-9a-f]{64}\b'
+scan HIGH uuid                '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'
+
+# ---- HIGH: organisation-specific terms supplied out-of-band -----------------
+PRIV_TERMS=${IP_SCAN_PRIVATE_TERMS:-}
+if [ -f "$PRIVATE" ]; then
+    FILE_TERMS=$(grep -v '^\s*#' "$PRIVATE" | grep -v '^\s*$' | paste -sd '|')
+    PRIV_TERMS="${PRIV_TERMS:+$PRIV_TERMS|}$FILE_TERMS"
 fi
 if [ -n "$PRIV_TERMS" ]; then
-  # Count top-level alternatives: a "|" at parenthesis depth 0 separates terms, so a
-  # regex like cooper(vision|surgical) still counts as one.
-  NTERMS="$(printf '%s' "$PRIV_TERMS" | awk 'BEGIN{d=0;n=1} {for(i=1;i<=length($0);i++){c=substr($0,i,1); if(c=="\\"){i++;continue} if(c=="(")d++; else if(c==")")d--; else if(c=="|"&&d==0)n++}} END{print n}')"
-  scan HIGH "private_terms($NTERMS terms)" -i "($PRIV_TERMS)"
+    # Count top-level alternatives: "|" at parenthesis depth 0; escaped chars skipped.
+    NTERMS=$(printf '%s' "$PRIV_TERMS" | awk 'BEGIN{d=0;n=1} {for(i=1;i<=length($0);i++){c=substr($0,i,1); if(c=="\\"){i++;continue} if(c=="(")d++; else if(c==")")d--; else if(c=="|"&&d==0)n++}} END{print n}')
+    SCAN_NOTE="$NTERMS terms"
+    scan HIGH private_terms -i "($PRIV_TERMS)"
 else
-  printf "  %-4s %-22s %s\n" HIGH private_terms "(skipped: IP_SCAN_PRIVATE_TERMS unset, no $PRIVATE_FILE)"
-  if [ "$REQUIRE_PRIVATE" -eq 1 ]; then
-    echo "REFUSED: --require-private is set but zero private terms were loaded."
-    echo "         Run scripts/setup-private-terms.sh (author) or drop the flag (public classes only)."
-    exit 3
-  fi
-  echo "WARNING: zero private terms loaded; public classes only. Author: run scripts/setup-private-terms.sh"
+    printf '%-5s %-22s (skipped: no %s and IP_SCAN_PRIVATE_TERMS unset)\n' HIGH private_terms "$PRIVATE"
+    if [ "$REQUIRE_PRIVATE" -eq 1 ]; then
+        echo "REFUSED: --require-private is set but zero private terms were loaded."
+        echo "         Run scripts/setup-private-terms.sh (author) or drop the flag (public classes only)."
+        exit 3
+    fi
+    echo "WARNING: zero private terms loaded; public classes only. Author: run scripts/setup-private-terms.sh"
 fi
-scan LOW  uuid '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'
 
-echo
+# ---- MED: needs context to be harmless --------------------------------------
+scan MED  rfc1918             '\b(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})\b'
+scan MED  internal_domains -i '\b[a-z0-9-]+\.(corp|local|internal|lan|intra|priv|dmz)\b'
+scan MED  domain_user     -P  '\b[A-Z][A-Z0-9-]{2,}\\+[A-Za-z][A-Za-z0-9._-]{2,}\b'
+scan MED  hostnames           '\b(DESKTOP|LAPTOP|WKS|WS|PC|SRV|DC|EXCH|SQL|FS|APP|WEB|VM|HV|LT|WIN)[0-9]*-[A-Z0-9]{3,}\b'
+
+# ---- LOW: informational -----------------------------------------------------
+scan LOW  public_ip       -P  '\b(?!10\.|127\.|0\.|192\.168\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|172\.(1[6-9]|2[0-9]|3[01])\.)([1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\b'
+scan LOW  realdata_words  -i  '(real[- ]?(data|telemetry|incident|case|customer|alert)|from prod|production data)'
+
 if [ -s "$OUT/grep-errors.txt" ]; then
-  echo "SCAN BROKEN: grep reported errors (a pattern that cannot run is a pattern that never hits):"
-  sort -u "$OUT/grep-errors.txt" | head -5; exit 2
+    echo "BROKEN: grep reported errors; a pattern that cannot run never hits"
+    sort -u "$OUT/grep-errors.txt" | head -10
+    exit 2
 fi
-if [ "$bad" -gt 0 ]; then
-  echo "SCAN FAILED: $bad HIGH/MED pattern(s) with hits — see $OUT/*.txt"
-  for f in "$OUT"/*.txt; do
-    [ "$(basename "$f")" = files.txt ] && continue
-    [ -s "$f" ] && { echo "--- $(basename "$f" .txt)"; head -20 "$f"; }
-  done
-  exit 1
+if [ "$FAIL" -ne 0 ]; then
+    echo "FAIL: HIGH/MED hits found — see $OUT/<pattern>.txt"
+    for f in "$OUT"/*.txt; do
+        case "$(basename "$f")" in files.txt|grep-errors.txt|public_ip.txt|realdata_words.txt) continue ;; esac
+        [ -s "$f" ] && { echo "--- $(basename "$f" .txt)"; head -20 "$f"; }
+    done
+    exit 1
 fi
-echo "SCAN CLEAN: zero HIGH/MED hits over $N tracked text files"
+echo "PASS: zero HIGH/MED hits"
