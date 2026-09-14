@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # ip_scan.sh — identifier-safety scan over the git-tracked text files of a repository.
 #
-# Usage: scripts/ip_scan.sh <repo path> <out dir>
+# Usage: scripts/ip_scan.sh <repo path> <out dir> [--require-private]
+#   --require-private  exit 3 if zero private terms were loaded (used by the pre-commit
+#                      hook installed by scripts/setup-private-terms.sh). Without it a
+#                      zero count prints a visible warning.
 # Writes one hit list per pattern to <out dir>/<pattern>.txt (file:line:text), prints a
 # per-pattern summary, and exits non-zero if ANY pattern classed HIGH or MED has a hit.
 # Meant as a release gate for code extracted from a private working repo: it catches
@@ -26,6 +29,9 @@
 # Note: `file` reports .ts/.mjs as application/javascript, so the type filter must name
 # javascript explicitly — a bare text/ filter silently skips all the source files.
 set -uo pipefail
+REQUIRE_PRIVATE=0; ARGS=()
+for a in "$@"; do case "$a" in --require-private) REQUIRE_PRIVATE=1 ;; *) ARGS+=("$a") ;; esac; done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
 REPO="${1:?repo path}"; OUT="${2:?out dir}"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"; : > "$OUT/grep-errors.txt"
 cd "$REPO" || exit 1
@@ -86,6 +92,12 @@ if [ -n "$PRIV_TERMS" ]; then
   scan HIGH "private_terms($NTERMS terms)" -i "($PRIV_TERMS)"
 else
   printf "  %-4s %-22s %s\n" HIGH private_terms "(skipped: IP_SCAN_PRIVATE_TERMS unset, no $PRIVATE_FILE)"
+  if [ "$REQUIRE_PRIVATE" -eq 1 ]; then
+    echo "REFUSED: --require-private is set but zero private terms were loaded."
+    echo "         Run scripts/setup-private-terms.sh (author) or drop the flag (public classes only)."
+    exit 3
+  fi
+  echo "WARNING: zero private terms loaded; public classes only. Author: run scripts/setup-private-terms.sh"
 fi
 scan LOW  uuid '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'
 
