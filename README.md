@@ -128,6 +128,13 @@ ticket id, vendor console URL, credential-shaped assignment, hash or home path, 
 positive control: a planted tree must fail, a clean tree must pass. That control caught two
 patterns that had been silently dead under GNU grep.
 
+**Local setup.** The private terms are the author's: an employer name, a hostname scheme, a
+case-id form. They live in a private repository and reach this one two ways. CI enforces
+them through the `IP_SCAN_PRIVATE_TERMS` secret, and `scripts/setup-private-terms.sh`
+fetches them into the git-ignored `scripts/ip_scan.private` and installs a pre-commit hook
+that refuses to commit unless they are loaded. In any other clone the script prints one line
+and exits, and the scanner runs its public classes only.
+
 ## Configuration
 
 `SCOUT_MODEL` names the `local` node's model, `SCOUT_MODEL_<NAME>` adds a node per machine,
