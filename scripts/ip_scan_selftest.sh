@@ -38,11 +38,14 @@ echo "== private terms: a planted term must FAIL the scan"
 mkrepo "$T/term"
 echo "internal codename: Project Zebra (do not ship)" > note.txt
 git add -A && git commit -qm plant
-if IP_SCAN_PRIVATE_TERMS="fictional-employer|project zebra" bash ip_scan.sh . "$T/out-term" > "$T/term.log" 2>&1; then
+# pipe-joined regex alternatives, exactly as CI supplies them from the secret; the middle
+# term carries its own "|" inside a group and must count as ONE term (3 terms total)
+if IP_SCAN_PRIVATE_TERMS='fictional-employer|proj(ect|) zebra|\bZBR[0-9]+\b' bash ip_scan.sh . "$T/out-term" > "$T/term.log" 2>&1; then
   echo "SELFTEST FAILED: private term not caught"; cat "$T/term.log"; exit 1
 fi
-[ -s "$T/out-term/private_terms.txt" ] || { echo "SELFTEST FAILED: private_terms.txt empty"; cat "$T/term.log"; exit 1; }
-echo "   caught: private_terms"
+[ -s "$T/out-term/private_terms(3 terms).txt" ] || { echo "SELFTEST FAILED: private_terms hit list empty or term count wrong"; cat "$T/term.log"; ls "$T/out-term"; exit 1; }
+grep -q "private_terms(3 terms)" "$T/term.log" || { echo "SELFTEST FAILED: term count not reported"; cat "$T/term.log"; exit 1; }
+echo "   caught: private_terms (3 terms counted from a pipe-joined list)"
 
 echo "== negative control: a clean tree must PASS"
 mkrepo "$T/clean"
