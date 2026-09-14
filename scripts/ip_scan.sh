@@ -15,10 +15,12 @@
 # Severity: HIGH = must never ship; MED = almost always a leak, review and remove;
 # LOW = usually benign, listed for the reviewer.
 #
-# IP_SCAN_PRIVATE_TERMS (optional): comma-, pipe- or newline-separated literal terms that must
-# never appear in the tree (an employer name, an internal project codename, a hostname
-# scheme). Scanned case-insensitively as one extra HIGH pattern. In CI this comes from a
-# repository secret so the terms themselves never land in the public tree.
+# Private terms (optional): organisation-specific identifiers that must never appear in
+# the tree (an employer name, a hostname scheme, a case-id form). Supplied as extended
+# regex alternatives joined with "|" in IP_SCAN_PRIVATE_TERMS (how CI reads them from a
+# repository secret) and/or one regex per line in scripts/ip_scan.private (gitignored,
+# for local runs). Scanned case-insensitively as one extra HIGH pattern; the summary
+# line reports how many terms were loaded so an empty secret cannot pass as a full one.
 #
 # This script is excluded from its own scan (its pattern strings would match themselves).
 # Note: `file` reports .ts/.mjs as application/javascript, so the type filter must name
@@ -71,13 +73,19 @@ scan MED  user_home -E '/home/[a-z]+|C:\\\\Users\\\\[A-Za-z]+'
 scan MED  realdata -iE '(real[- ]?(data|telemetry|incident|case|customer|alert)|from prod|production data|sanitiz|redact|anonymi|scrub)'
 scan MED  customer -iE '\b(customer|client name|clientname|account name|acct)\b'
 scan MED  work_ids -E '\b(W|P[12]-|DD-|H)[0-9]{1,3}[a-z]?\b'
-if [ -n "${IP_SCAN_PRIVATE_TERMS:-}" ]; then
-  # literal terms -> one escaped ERE alternation; blank entries dropped
-  terms_re="$(printf '%s' "$IP_SCAN_PRIVATE_TERMS" | tr ',|' '\n\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' \
-    | sed -e 's/[][\.*^$+?(){}|\\\/]/\\&/g' | paste -sd'|' -)"
-  [ -n "$terms_re" ] && scan HIGH private_terms -i "$terms_re"
+PRIV_TERMS="${IP_SCAN_PRIVATE_TERMS:-}"
+PRIVATE_FILE="$(dirname "${BASH_SOURCE[0]}")/ip_scan.private"
+if [ -f "$PRIVATE_FILE" ]; then
+  FILE_TERMS="$(grep -v '^[[:space:]]*#' "$PRIVATE_FILE" | grep -v '^[[:space:]]*$' | paste -sd'|' -)"
+  PRIV_TERMS="${PRIV_TERMS:+$PRIV_TERMS|}$FILE_TERMS"
+fi
+if [ -n "$PRIV_TERMS" ]; then
+  # Count top-level alternatives: a "|" at parenthesis depth 0 separates terms, so a
+  # regex like cooper(vision|surgical) still counts as one.
+  NTERMS="$(printf '%s' "$PRIV_TERMS" | awk 'BEGIN{d=0;n=1} {for(i=1;i<=length($0);i++){c=substr($0,i,1); if(c=="\\"){i++;continue} if(c=="(")d++; else if(c==")")d--; else if(c=="|"&&d==0)n++}} END{print n}')"
+  scan HIGH "private_terms($NTERMS terms)" -i "($PRIV_TERMS)"
 else
-  printf "  %-4s %-22s %s\n" HIGH private_terms "(IP_SCAN_PRIVATE_TERMS unset — skipped)"
+  printf "  %-4s %-22s %s\n" HIGH private_terms "(skipped: IP_SCAN_PRIVATE_TERMS unset, no $PRIVATE_FILE)"
 fi
 scan LOW  uuid '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'
 
