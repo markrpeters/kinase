@@ -51,23 +51,34 @@
 #     is missing altogether the file list is empty and a scan of nothing would
 #     PASS, so its absence is fatal.
 #
-# Usage: scripts/ip_scan.sh [repo-root] [out-dir] [--require-private]
+# Usage: scripts/ip_scan.sh [repo-root-dir] [out-dir] [--require-private]
+#   repo-root-dir      DIRECTORY to scan (default: the repo containing this script).
+#                      The scanner takes directories, never file paths: it lists the
+#                      git-tracked text files under the root itself. To check specific
+#                      files, scan their repo root and read scan-results/<class>.txt.
+#   out-dir            DIRECTORY for the per-pattern hit lists (default: <root>/scan-results).
 #   --require-private  exit 3 if zero private terms were loaded (used by the
 #                      pre-commit hook installed by scripts/setup-private-terms.sh).
 #                      Without it a zero count prints a visible warning.
+#   Anything else (a third positional, a file where a directory is expected) prints
+#   this usage and exits 2 before anything is created.
 set -uo pipefail
 REQUIRE_PRIVATE=0; ARGS=()
 for a in "$@"; do case "$a" in --require-private) REQUIRE_PRIVATE=1 ;; *) ARGS+=("$a") ;; esac; done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
+usage() { sed -n '/^# Usage: /,/^set -uo pipefail/{/^set -uo pipefail/d; s/^# \{0,3\}//p}' "$0" >&2; exit 2; }
+[ $# -le 2 ] || { echo "ip_scan.sh: expected at most 2 positional arguments, got $#" >&2; usage; }
 ROOT=${1:-$(cd "$(dirname "$0")/.." && pwd)}
+[ -d "$ROOT" ] || { echo "ip_scan.sh: repo-root-dir '$ROOT' is not a directory" >&2; usage; }
 OUT=${2:-$ROOT/scan-results}
+[ -e "$OUT" ] && [ ! -d "$OUT" ] && { echo "ip_scan.sh: out-dir '$OUT' exists and is not a directory" >&2; usage; }
 SELF=scripts/ip_scan.sh
 SELFTEST=scripts/ip_scan_selftest.sh
 PRIVATE=scripts/ip_scan.private
 PIN=scripts/ip_scan.sha256
 command -v file >/dev/null 2>&1 || { echo "BROKEN: file(1) is not installed; the file list would be empty and a scan of nothing passes"; exit 2; }
-mkdir -p "$OUT"
-OUT=$(cd "$OUT" && pwd)
+mkdir -p "$OUT" || exit 2
+OUT=$(cd "$OUT" && pwd) || exit 2
 : > "$OUT/grep-errors.txt"
 cd "$ROOT" || exit 2
 
