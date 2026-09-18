@@ -152,6 +152,13 @@ team exercises. The harness gains a profile loader.
 Extracted from a larger private harness where this code ran daily. Everything specific to
 the original domain stayed behind; the identifier scan is the gate that says so.
 
+## How this is built
+
+Agentic coding tools (Claude Code) are used in this repository under an
+eval-gated methodology: nothing merges without the strict type check, the mock
+suites, the data-hygiene scan and its self-test, and a cold-read review of
+user-facing text.
+
 ## License
 
 Apache-2.0. Copyright 2026 Mark Peters. See `LICENSE`.
