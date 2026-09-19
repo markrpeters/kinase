@@ -4,7 +4,15 @@
   "description": "A harness that activates agents: scouts, fanout, and a runner over pi.",
   "author": "Mark Peters",
   "license": "Apache-2.0",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/markrpeters/kinase.git"
+  },
+  "files": [
+    "src",
+    "config",
+    "PI_VERSION"
+  ],
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -23,10 +31,11 @@
     "harness",
     "ollama"
   ],
-  "dependencies": {
+  "peerDependencies": {
     "@earendil-works/pi-coding-agent": "0.84.2"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
     "@types/node": "^22.15.0",
     "jiti": "^2.7.0",
     "typescript": "^5.9.3"

@@ -1,0 +1,76 @@
+name: publish
+
+# Tag v* -> gates -> pack the tarball for review -> publish to npm from the
+# `npm` environment, which holds a required reviewer, so the publish job waits
+# for a manual approval. Provenance is attached to every publish.
+#
+# 0.1.0 bootstrap: npm cannot configure a trusted publisher until the package
+# exists, so the first publish authenticates with NPM_TOKEN, a granular token
+# scoped to this one package and stored only in the `npm` environment. After
+# 0.1.0 is live: configure the trusted publisher on npmjs.com, delete the
+# NPM_TOKEN line below and the secret, revoke the token. From then on the
+# publish job authenticates with the OIDC id-token alone.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Tag must equal package.json version
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAG=${GITHUB_REF_NAME#v}
+          [ "$PKG" = "$TAG" ] || { echo "package.json $PKG != tag $TAG"; exit 1; }
+      - run: npm ci
+      - run: npm run setup
+      - run: npm run typecheck
+      - run: npm test
+      - name: Identifier-safety scan (fails on any HIGH/MED hit)
+        env:
+          IP_SCAN_PRIVATE_TERMS: ${{ secrets.IP_SCAN_PRIVATE_TERMS }}
+        run: bash scripts/ip_scan.sh . scan-out
+      - run: bash scripts/ip_scan_selftest.sh
+      - name: Pack the tarball the reviewer inspects
+        run: |
+          mkdir -p dist
+          npm pack --pack-destination dist
+          sha256sum dist/*.tgz | tee dist/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: npm 11.5.1 or later (trusted publishing floor)
+        run: npm install -g npm@latest && npm --version
+      - run: npm ci
+      - name: Publish with provenance
+        # npm pack is reproducible for the same tree, so the shasum npm prints
+        # here must equal dist/SHA256SUMS from the build job. The reviewer
+        # checks that after the run.
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # 0.1.0 bootstrap only; delete after trusted publisher is configured
