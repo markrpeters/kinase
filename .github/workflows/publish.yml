@@ -1,15 +1,12 @@
 name: publish
 
-# Tag v* -> gates -> pack the tarball for review -> publish to npm from the
-# `npm` environment, which holds a required reviewer, so the publish job waits
-# for a manual approval. Provenance is attached to every publish.
-#
-# 0.1.0 bootstrap: npm cannot configure a trusted publisher until the package
-# exists, so the first publish authenticates with NPM_TOKEN, a granular token
-# scoped to this one package and stored only in the `npm` environment. After
-# 0.1.0 is live: configure the trusted publisher on npmjs.com, delete the
-# NPM_TOKEN line below and the secret, revoke the token. From then on the
-# publish job authenticates with the OIDC id-token alone.
+# Tag v* -> gates -> pack the tarball for review -> stage to npm from the
+# `npm` environment, which holds a required reviewer, so the stage job waits
+# for a manual approval on GitHub. The trusted publisher on npmjs.com allows
+# `npm stage publish` only: the version lands in npm's staging area, and a
+# maintainer approves it on npmjs.com with 2FA after inspecting the staged
+# tarball (`npm stage download`). Authentication is the OIDC id-token; no
+# npm token exists anywhere. Provenance is attached to every publish.
 
 on:
   push:
@@ -67,10 +64,9 @@ jobs:
       - name: npm 11.5.1 or later (trusted publishing floor)
         run: npm install -g npm@latest && npm --version
       - run: npm ci
-      - name: Publish with provenance
-        # npm pack is reproducible for the same tree, so the shasum npm prints
-        # here must equal dist/SHA256SUMS from the build job. The reviewer
-        # checks that after the run.
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # 0.1.0 bootstrap only; delete after trusted publisher is configured
+      - name: Stage to npm with provenance
+        # npm pack is reproducible at the tar layer for the same tree. The
+        # reviewer downloads the staged tarball and compares
+        # `gzip -dc | sha256sum` with the build job's artifact before approving
+        # on npmjs.com.
+        run: npm stage publish --access public --provenance
