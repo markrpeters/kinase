@@ -62,6 +62,16 @@ A store write that fails is logged and never fails the job.
 | a small tool-calling model | `qwen2.5:7b` is the placeholder | must actually emit tool calls through your server (see below) |
 | `just` | optional | recipe runner |
 
+## Install
+
+As a pi package, from npm:
+
+    pi install npm:@markrpeters/kinase@0.1.0
+
+pi 0.84.2 is a peer dependency: the package expects the pi that loads it, and
+installs nothing else. To run the gates or the demo, clone this repo and
+`npm ci` as below.
+
 ## 30-second demo
 
 Live, from this export, against Ollama 0.32 on one machine. Orchestrator `qwen3-coder:30b`,
