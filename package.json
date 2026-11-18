@@ -32,10 +32,11 @@
     "ollama"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.2"
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-coding-agent": "1.5.0",
     "@types/node": "^22.15.0",
     "jiti": "^2.7.0",
     "typescript": "^5.9.3"

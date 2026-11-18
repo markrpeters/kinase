@@ -43,7 +43,7 @@ const {
   BUILTIN_TOOLS,
 } = core;
 
-// NDJSON fixtures (shapes captured from pi -p --mode json, v0.84.2).
+// NDJSON fixtures (shapes captured from pi -p --mode json, v0.84.2; not yet re-captured on 1.5.0).
 const td = (d) => JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: d } });
 const toolStart = JSON.stringify({ type: "tool_execution_start", toolName: "run_query" });
 const toolEndErr = JSON.stringify({ type: "tool_execution_end", isError: true });
@@ -146,6 +146,18 @@ check("resolve: custom w/o sourceInfo.path -> Error:", throwsErr(() => resolveIn
   });
   check("argv: no -e for builtin", !builtin.includes("-e"));
   check("argv: --tools read for builtin", builtin[builtin.indexOf("--tools") + 1] === "read");
+
+  // pi 1.x: --no-extensions drops built-ins, so a llama.cpp/ ref re-adds its provider
+  const lcpp = buildRunnerArgv({
+    ref: "llama.cpp/small-model",
+    tool: { name: "run_query", extPath: "/abs/data-tools.mjs", builtin: false },
+    systemPrompt: "S",
+    userMessage: "U",
+  });
+  const eVals = lcpp.flatMap((a, i) => (a === "-e" ? [lcpp[i + 1]] : []));
+  check("argv: llama.cpp ref loads -e builtin:llama.cpp", eVals.includes("builtin:llama.cpp"));
+  check("argv: llama.cpp ref still loads the custom tool's -e", eVals.includes("/abs/data-tools.mjs"));
+  check("argv: non-llama.cpp ref gets no builtin -e", !custom.includes("builtin:llama.cpp") && !builtin.includes("builtin:llama.cpp"));
 }
 
 // prompt / user message

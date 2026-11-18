@@ -6,10 +6,11 @@
  * tight prompt, single fact) answers reliably; the same model wrapped in a full agent
  * harness does not — so the scout ALWAYS runs bare.
  *
- * pi surface used (installed 0.84.2): ToolDefinition / registerTool; pi.exec;
+ * pi surface used (installed 1.5.0): ToolDefinition / registerTool; pi.exec;
  * pi.appendEntry; the result channel is the assistant text_delta stream in
  * `pi -p --mode json`. Subprocess spawn = `--no-extensions --no-skills
- * --no-context-files --tools read,grep,find,ls`.
+ * --no-context-files --tools read,grep,find,ls` (+ `-e builtin:llama.cpp` for a
+ * llama.cpp/ model ref, since pi 1.x's --no-extensions drops built-ins too).
  *
  * Error contract:
  *   "Error: ..." — model-visible, actionable (empty question, unknown node, pi missing).
@@ -26,12 +27,13 @@
  *   SCOUT_MAX_CHARS     response budget (default: 4000)
  */
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildScoutPrompt,
+  builtinProviderArgs,
   coerceScoutArgs,
   parseScoutStream,
   resolveNodeModel,
@@ -90,6 +92,7 @@ export default function (pi: ExtensionAPI) {
           "-p", "--mode", "json",
           "--no-session", "--no-extensions", "--no-skills", "--no-context-files",
           "--tools", "read,grep,find,ls",
+          ...builtinProviderArgs(target.ref),
         ];
         if ((process.env["SCOUT_THINKING"] ?? "").toLowerCase() === "off") {
           argv.push("--thinking", "off");

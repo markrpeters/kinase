@@ -17,7 +17,7 @@
  * dispatch tools run the subagent BARE (`--no-extensions`: no other extension, hook or
  * package loads), thinking OFF, inheriting the parent's env via node:child_process.spawn.
  *
- * pi surface used (installed 0.84.2): pi.getActiveTools()/getAllTools(); ToolInfo.sourceInfo
+ * pi surface used (installed 1.5.0): pi.getActiveTools()/getAllTools(); ToolInfo.sourceInfo
  * .path; ExecOptions has NO env field → spawn WITH env; pi tool execution default is
  * "parallel", so fanout's concurrent spawns overlap; CLI flags verified via `pi --help`.
  * Result channel = assistant text_delta.
@@ -43,7 +43,7 @@
  *   delegated tool needs from the environment travels with it.
  */
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

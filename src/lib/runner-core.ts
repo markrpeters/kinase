@@ -8,7 +8,7 @@
  * call and report. Small local models handle this shape reliably where free-form
  * delegation fails.
  *
- * The tool-inheritance mechanic (pi 0.84.2):
+ * The tool-inheritance mechanic (pi 1.5.0):
  *   - pi.getActiveTools(): string[]  — the parent's currently-active tool names.
  *   - pi.getAllTools(): ToolInfo[]   — each with sourceInfo.path = the extension file
  *     that registered it. So we resolve a requested custom tool to the exact -e
@@ -22,7 +22,7 @@
  * field, so pi.exec cannot pass environment through) lives in runner-tool.ts.
  */
 
-import { parseScoutStream, resolveNodeModel } from "./scout-core.ts";
+import { builtinProviderArgs, parseScoutStream, resolveNodeModel } from "./scout-core.ts";
 export { resolveNodeModel };
 
 /** Built-in tool names (SDK: read, bash, edit, write, grep, find, ls). A requested
@@ -182,6 +182,7 @@ export function buildRunnerArgv(opts: {
     "--model", opts.ref,
     "-p", "--mode", "json",
     "--no-session", "--no-context-files", "--no-skills", "--no-extensions",
+    ...builtinProviderArgs(opts.ref),
   ];
   if (!opts.tool.builtin && opts.tool.extPath) {
     argv.push("-e", opts.tool.extPath);
