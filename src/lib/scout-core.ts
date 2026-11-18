@@ -180,6 +180,16 @@ export function resolveNodeModel(node: string, env: NodeJS.ProcessEnv): NodeReso
   };
 }
 
+/** pi 1.x: `--no-extensions` also drops pi's BUILT-IN extensions, and the llama.cpp
+ * provider is one of them. A worker whose model ref uses that provider ("llama.cpp/<id>")
+ * must load it back explicitly, or pi cannot resolve the model. Every other provider
+ * (Ollama, vLLM, LM Studio, any OpenAI-compatible server declared in models.json) is
+ * unaffected and gets no extra args. */
+export const LLAMA_CPP_PROVIDER = "llama.cpp";
+export function builtinProviderArgs(ref: string): string[] {
+  return ref.startsWith(`${LLAMA_CPP_PROVIDER}/`) ? ["-e", `builtin:${LLAMA_CPP_PROVIDER}`] : [];
+}
+
 /** The bare-scout system prompt: tight, single-fact, grep-first. A search_hint scopes
  * the evidence (the main accuracy lever) when the caller can pre-target the file or
  * pattern. */

@@ -57,7 +57,7 @@ A store write that fails is logged and never fails the job.
 | requirement | version | why |
 |---|---|---|
 | Node.js | ≥ 22.19 | pi's engine floor |
-| pi | **0.84.2**, pinned in `PI_VERSION` and installed by `npm ci` | the extension API and the `-p --mode json` stream shape this code is verified against |
+| pi | **1.5.0**, pinned in `PI_VERSION` and installed by `npm ci` | the extension API and the `-p --mode json` stream shape this code is verified against |
 | a model server | Ollama at `localhost:11434`, or any OpenAI-compatible endpoint | live use only; the offline gates need none |
 | a small tool-calling model | `qwen2.5:7b` is the placeholder | must actually emit tool calls through your server (see below) |
 | `just` | optional | recipe runner |
@@ -68,7 +68,7 @@ As a pi package, from npm:
 
     pi install npm:@markrpeters/kinase@0.1.0
 
-pi 0.84.2 is a peer dependency: the package expects the pi that loads it, and
+pi 1.5.0 is a peer dependency: the package expects the pi that loads it, and
 installs nothing else. To run the gates or the demo, clone this repo and
 `npm ci` as below.
 

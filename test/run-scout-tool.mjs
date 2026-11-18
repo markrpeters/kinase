@@ -22,9 +22,12 @@ process.env.SCOUT_MODEL_NODE2 = "node2/small-model";
 
 // ---------- core unit tests ----------
 const core = await jiti.import(`../src/lib/scout-core.ts?x=${Math.random()}`);
-const { parseScoutStream, coerceScoutArgs, resolveNodeModel, knownNodes, defaultNode, buildScoutPrompt, DEFAULT_NODE, DEFAULT_MODEL_REF } = core;
+const { parseScoutStream, coerceScoutArgs, resolveNodeModel, knownNodes, defaultNode, buildScoutPrompt, builtinProviderArgs, DEFAULT_NODE, DEFAULT_MODEL_REF } = core;
 
-// NDJSON stream fixtures (shapes captured from pi -p --mode json, v0.84.2).
+check("builtinProviderArgs: llama.cpp ref -> -e builtin:llama.cpp", JSON.stringify(builtinProviderArgs("llama.cpp/qwen")) === '["-e","builtin:llama.cpp"]');
+check("builtinProviderArgs: other providers -> none", builtinProviderArgs("ollama/qwen2.5:7b").length === 0 && builtinProviderArgs("vllm/llama.cpp-ish").length === 0);
+
+// NDJSON stream fixtures (shapes captured from pi -p --mode json, v0.84.2; not yet re-captured on 1.5.0).
 const td = (d) => JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: d } });
 const tool = JSON.stringify({ type: "tool_execution_start", toolName: "grep" });
 const endOk = JSON.stringify({ type: "agent_end", willRetry: false });
@@ -167,6 +170,7 @@ const okExec = async () => ({ stdout: GOOD, stderr: "", code: 0, killed: false }
   check("e2e: answer text returned", res.content[0].text.includes("8089"));
   check("e2e: details node/model", res.details.node === "node2" && res.details.model === "small-model" && res.details.tool_calls === 1);
   check("e2e: argv bare regime", seenArgv.includes("--no-extensions") && seenArgv[seenArgv.indexOf("--tools") + 1] === "read,grep,find,ls" && seenArgv[seenArgv.indexOf("--model") + 1] === "node2/small-model" && seenArgv[seenArgv.length - 1] === "server port?");
+  check("e2e: argv has no builtin -e for a non-llama.cpp node", !seenArgv.includes("-e"));
   check(
     "e2e: audit entry",
     entries.length === 1 &&
